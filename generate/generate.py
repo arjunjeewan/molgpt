@@ -13,9 +13,9 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from moses.utils import get_mol
+from get_mol import get_mol
 import re
-import moses
+# import moses
 import json
 from rdkit.Chem import RDConfig
 import json
@@ -24,10 +24,11 @@ import os
 import sys
 sys.path.append(os.path.join(RDConfig.RDContribDir, 'SA_Score'))
 
-import sascorer
+from sascorer import calculateScore
 
 from rdkit.Chem.rdMolDescriptors import CalcTPSA
 
+import wandb # for logging metrics and tracking experiments
 
 # python generate.py --model_weight guacamol_nocond_new.pt --data_name guacamol2 --csv_name guacamol_temp1_nocond_30k --gen_size 1000 --vocab_size 94 --block_size 100
 
@@ -55,6 +56,27 @@ if __name__ == '__main__':
 
 
         context = "C"
+
+        config = dict(
+                model_weight = args.model_weight,
+                scaffold = args.scaffold,
+                lstm = args.lstm,
+                csv_name = args.csv_name,
+                data_name = args.data_name,
+                batch_size = args.batch_size,
+                gen_size = args.gen_size,
+                vocab_size = args.vocab_size,
+                block_size = args.block_size,
+                props = args.props,
+                n_layer = args.n_layer,
+                n_head = args.n_head,
+                n_embd = args.n_embd,
+                lstm_layers = args.lstm_layers
+        )
+
+        wandb.init(project='molgpt', config=config)
+        wandb.run.name = args.csv_name
+        
 
 
         data = pd.read_csv(args.data_name + '.csv')
@@ -232,7 +254,7 @@ if __name__ == '__main__':
 
             
             results['qed'] = results['molecule'].apply(lambda x: QED.qed(x) )
-            results['sas'] = results['molecule'].apply(lambda x: sascorer.calculateScore(x))
+            results['sas'] = results['molecule'].apply(lambda x: calculateScore(x))
             results['logp'] = results['molecule'].apply(lambda x: Crippen.MolLogP(x) )
             results['tpsa'] = results['molecule'].apply(lambda x: CalcTPSA(x) )
             # results['temperature'] = temp
@@ -305,7 +327,7 @@ if __name__ == '__main__':
                         results['condition'] = str((c[0], c[1], c[2]))
                         
                 results['qed'] = results['molecule'].apply(lambda x: QED.qed(x) )
-                results['sas'] = results['molecule'].apply(lambda x: sascorer.calculateScore(x))
+                results['sas'] = results['molecule'].apply(lambda x: calculateScore(x))
                 results['logp'] = results['molecule'].apply(lambda x: Crippen.MolLogP(x) )
                 results['tpsa'] = results['molecule'].apply(lambda x: CalcTPSA(x) )
                 # results['temperature'] = temp
@@ -370,7 +392,7 @@ if __name__ == '__main__':
                         
                 results['scaffold_cond'] = j
                 results['qed'] = results['molecule'].apply(lambda x: QED.qed(x) )
-                results['sas'] = results['molecule'].apply(lambda x: sascorer.calculateScore(x))
+                results['sas'] = results['molecule'].apply(lambda x: calculateScore(x))
                 results['logp'] = results['molecule'].apply(lambda x: Crippen.MolLogP(x) )
                 results['tpsa'] = results['molecule'].apply(lambda x: CalcTPSA(x) )
                 # results['temperature'] = temp
@@ -447,7 +469,7 @@ if __name__ == '__main__':
                             
                     results['scaffold_cond'] = j
                     results['qed'] = results['molecule'].apply(lambda x: QED.qed(x) )
-                    results['sas'] = results['molecule'].apply(lambda x: sascorer.calculateScore(x))
+                    results['sas'] = results['molecule'].apply(lambda x: calculateScore(x))
                     results['logp'] = results['molecule'].apply(lambda x: Crippen.MolLogP(x) )
                     results['tpsa'] = results['molecule'].apply(lambda x: CalcTPSA(x) )
                     # results['temperature'] = temp
