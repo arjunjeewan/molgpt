@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from moses.utils import get_mol
+from get_mol import get_mol
 from rdkit import Chem
    
 import numpy as np
