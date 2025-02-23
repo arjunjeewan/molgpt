@@ -57,24 +57,8 @@ if __name__ == '__main__':
 
         context = "C"
 
-        config = dict(
-                model_weight = args.model_weight,
-                scaffold = args.scaffold,
-                lstm = args.lstm,
-                csv_name = args.csv_name,
-                data_name = args.data_name,
-                batch_size = args.batch_size,
-                gen_size = args.gen_size,
-                vocab_size = args.vocab_size,
-                block_size = args.block_size,
-                props = args.props,
-                n_layer = args.n_layer,
-                n_head = args.n_head,
-                n_embd = args.n_embd,
-                lstm_layers = args.lstm_layers
-        )
-
-        wandb.init(project='molgpt', config=config)
+        wandb.init(project='molgpt')
+        wandb.config.update(vars(args))
         wandb.run.name = args.csv_name
         
 
@@ -103,7 +87,7 @@ if __name__ == '__main__':
         # condition = ['O=C(CCc1cn[nH]c1)NCCC1CC2CCC1C2', 'O=C(CCC(=O)NCC1CCCO1)NCc1ccccc1', 'O=S(=O)(Cc1ccon1)NCc1cccs1']  # sim 0.9, 0.8, ~0.7
 
 
-        pattern =  "(\[[^\]]+]|<|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p|\(|\)|\.|=|#|-|\+|\\\\|\/|:|~|@|\?|>|\*|\$|\%[0-9]{2}|[0-9])"
+        pattern =  r"(\[[^\]]+]|<|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p|\(|\)|\.|=|#|-|\+|\\\\|\/|:|~|@|\?|>|\*|\$|\%[0-9]{2}|[0-9])"
         regex = re.compile(pattern)
         #lens = [len(regex.findall(i)) for i in smiles]
         #max_len = max(lens)
@@ -248,10 +232,15 @@ if __name__ == '__main__':
                     novel_ratio = check_novelty(unique_smiles, set(data[data['source']=='train']['smiles']))   # replace 'source' with 'split' for moses
 
 
-            print('Valid ratio: ', np.round(len(results)/(args.batch_size*gen_iter), 3))
-            print('Unique ratio: ', np.round(len(unique_smiles)/len(results), 3))
-            print('Novelty ratio: ', np.round(novel_ratio/100, 3))
-
+            wandb.log({
+                "valid_ratio": np.round(len(results) / (args.batch_size * gen_iter), 3),
+                "unique_ratio": np.round(len(unique_smiles) / len(results), 3),
+                "novelty_ratio": np.round(novel_ratio / 100, 3),
+                "qed_mean": results['qed'].apply(lambda x: QED.qed(x)).mean(),
+                "sas_mean": results['sas'].apply(lambda x: calculateScore(x)).mean(),
+                "logp_mean": results['logp'].apply(lambda x: Crippen.MolLogP(x)).mean(),
+                "tpsa_mean": results['tpsa'].apply(lambda x: CalcTPSA(x)).mean()
+                })
             
             results['qed'] = results['molecule'].apply(lambda x: QED.qed(x) )
             results['sas'] = results['molecule'].apply(lambda x: calculateScore(x))
@@ -314,9 +303,6 @@ if __name__ == '__main__':
 
 
                 print(f'Condition: {c}')
-                print('Valid ratio: ', np.round(len(results)/(args.batch_size*gen_iter), 3))
-                print('Unique ratio: ', np.round(len(unique_smiles)/len(results), 3))
-                print('Novelty ratio: ', np.round(novel_ratio/100, 3))
 
                 
                 if len(args.props) == 1:
@@ -326,15 +312,21 @@ if __name__ == '__main__':
                 else:
                         results['condition'] = str((c[0], c[1], c[2]))
                         
-                results['qed'] = results['molecule'].apply(lambda x: QED.qed(x) )
+                results['qed'] = results['molecule'].apply(lambda x: QED.qed(x))
                 results['sas'] = results['molecule'].apply(lambda x: calculateScore(x))
-                results['logp'] = results['molecule'].apply(lambda x: Crippen.MolLogP(x) )
-                results['tpsa'] = results['molecule'].apply(lambda x: CalcTPSA(x) )
+                results['logp'] = results['molecule'].apply(lambda x: Crippen.MolLogP(x))
+                results['tpsa'] = results['molecule'].apply(lambda x: CalcTPSA(x))
                 # results['temperature'] = temp
                 results['validity'] = np.round(len(results)/(args.batch_size*gen_iter), 3)
                 results['unique'] = np.round(len(unique_smiles)/len(results), 3)
                 results['novelty'] = np.round(novel_ratio/100, 3)
                 all_dfs.append(results)
+                wandb.log({
+                        "valid_ratio": np.round(len(results) / (args.batch_size * gen_iter), 3),
+                        "unique_ratio": np.round(len(unique_smiles) / len(results), 3),
+                        "novelty_ratio": np.round(novel_ratio / 100, 3),
+                })
+
 
 
         elif prop_condition is None and scaf_condition is not None:
@@ -384,9 +376,16 @@ if __name__ == '__main__':
 
 
                 print(f'Scaffold: {j}')
-                print('Valid ratio: ', np.round(len(results)/(args.batch_size*gen_iter), 3))
-                print('Unique ratio: ', np.round(len(unique_smiles)/len(results), 3))
-                print('Novelty ratio: ', np.round(novel_ratio/100, 3))
+                wandb.log({
+                "valid_ratio": np.round(len(results) / (args.batch_size * gen_iter), 3),
+                "unique_ratio": np.round(len(unique_smiles) / len(results), 3),
+                "novelty_ratio": np.round(novel_ratio / 100, 3),
+                "qed_mean": results['qed'].apply(lambda x: QED.qed(x)).mean(),
+                "sas_mean": results['sas'].apply(lambda x: calculateScore(x)).mean(),
+                "logp_mean": results['logp'].apply(lambda x: Crippen.MolLogP(x)).mean(),
+                "tpsa_mean": results['tpsa'].apply(lambda x: CalcTPSA(x)).mean()
+                })
+
 
                 
                         
@@ -400,6 +399,8 @@ if __name__ == '__main__':
                 results['unique'] = np.round(len(unique_smiles)/len(results), 3)
                 results['novelty'] = np.round(novel_ratio/100, 3)
                 all_dfs.append(results)
+                
+
 
 
         elif prop_condition is not None and scaf_condition is not None:
@@ -455,9 +456,16 @@ if __name__ == '__main__':
 
                     print(f'Condition: {c}')
                     print(f'Scaffold: {j}')
-                    print('Valid ratio: ', np.round(len(results)/(args.batch_size*gen_iter), 3))
-                    print('Unique ratio: ', np.round(len(unique_smiles)/len(results), 3))
-                    print('Novelty ratio: ', np.round(novel_ratio/100, 3))
+                    wandb.log({
+                        "valid_ratio": np.round(len(results) / (args.batch_size * gen_iter), 3),
+                        "unique_ratio": np.round(len(unique_smiles) / len(results), 3),
+                        "novelty_ratio": np.round(novel_ratio / 100, 3),
+                        "qed_mean": results['qed'].apply(lambda x: QED.qed(x)).mean(),
+                        "sas_mean": results['sas'].apply(lambda x: calculateScore(x)).mean(),
+                        "logp_mean": results['logp'].apply(lambda x: Crippen.MolLogP(x)).mean(),
+                        "tpsa_mean": results['tpsa'].apply(lambda x: CalcTPSA(x)).mean()
+                    })
+
 
                     
                     if len(args.props) == 1:
@@ -477,6 +485,8 @@ if __name__ == '__main__':
                     results['unique'] = np.round(len(unique_smiles)/len(results), 3)
                     results['novelty'] = np.round(novel_ratio/100, 3)
                     all_dfs.append(results)
+                
+                    
 
 
         results = pd.concat(all_dfs)
@@ -491,7 +501,18 @@ if __name__ == '__main__':
                 novel_ratio = check_novelty(unique_smiles, set(data[data['source']=='train']['smiles']))    # replace 'source' with 'split' for moses
                
 
-        print('Valid ratio: ', np.round(len(results)/(args.batch_size*gen_iter*count), 3))
-        print('Unique ratio: ', np.round(len(unique_smiles)/len(results), 3))
-        print('Novelty ratio: ', np.round(novel_ratio/100, 3))
+        wandb.log({
+        "valid_ratio": np.round(len(results) / (args.batch_size * gen_iter), 3),
+        "unique_ratio": np.round(len(unique_smiles) / len(results), 3),
+        "novelty_ratio": np.round(novel_ratio / 100, 3),
+        })
+
+        wandb_table = wandb.Table(columns=["SMILES", "QED", "SAS", "LogP", "TPSA"])
+
+        for _, row in results.iterrows():
+                wandb_table.add_data(row["smiles"], row["qed"], row["sas"], row["logp"], row["tpsa"])
+
+        wandb.log({"Generated Molecules": wandb_table})
+
+        wandb.finish()
 
