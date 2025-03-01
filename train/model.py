@@ -16,6 +16,53 @@ from torch.nn import functional as F
 
 logger = logging.getLogger(__name__)
 
+
+def rotate_half(x):
+    """ rotates half the hidden dims of the input (GPT-NeoX / Llama style). """
+    x1, x2 = x.chunk(2, dim=-1)
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def apply_rotary_pos_emb(q, k, cos, sin):
+    # q, k: (B, n_head, S, head_dim); cos, sin: (S, head_dim)
+    cos = cos[None, None, :, :].to(dtype=q.dtype)
+    sin = sin[None, None, :, :].to(dtype=q.dtype)
+    q = (q * cos) + (rotate_half(q) * sin)
+    k = (k * cos) + (rotate_half(k) * sin)
+    return q, k
+
+
+class RotaryEmbedding(nn.Module):
+    """ Rotary Position Embedding (RoPE). Injects position by rotating Q/K vectors. """
+
+    def __init__(self, dim, base=10000):
+        super().__init__()
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+    def forward(self, seq_len, device):
+        t = torch.arange(seq_len, device=device).type_as(self.inv_freq)
+        freqs = torch.einsum("i,j->ij", t, self.inv_freq)   # (seq_len, dim/2)
+        emb = torch.cat((freqs, freqs), dim=-1)             # (seq_len, dim)
+        return emb.cos(), emb.sin()
+
+
+class RMSNorm(nn.Module):
+    """ Root Mean Square Layer Normalization (no mean-centering, no bias). """
+
+    def __init__(self, dim, eps=1e-5):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward(self, x):
+        output = self._norm(x.float()).type_as(x)
+        return output * self.weight
+
+
 class GPTConfig:
     """ base GPT config, params common to all GPT versions """
     embd_pdrop = 0.1
@@ -60,14 +107,24 @@ class CausalSelfAttention(nn.Module):
                                      .view(1, 1, config.block_size + num, config.block_size + num))
 
         self.n_head = config.n_head
+        # rotary position embedding applied per-head to query/key vectors
+        self.rotary = RotaryEmbedding(config.n_embd // config.n_head)
 
-    def forward(self, x, layer_past=None):
+    def forward(self, x, num_cond=0, layer_past=None):
         B, T, C = x.size()
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         k = self.key(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = self.query(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = self.value(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        # apply rotary position embeddings to the SMILES tokens only (positions num_cond..T-1),
+        # leaving the prepended condition tokens (property / scaffold) unrotated.
+        if T - num_cond > 0:
+            cos, sin = self.rotary(T - num_cond, x.device)
+            q_s, k_s = apply_rotary_pos_emb(q[:, :, num_cond:, :], k[:, :, num_cond:, :], cos, sin)
+            q = torch.cat([q[:, :, :num_cond, :], q_s], dim=2)
+            k = torch.cat([k[:, :, :num_cond, :], k_s], dim=2)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
@@ -82,23 +139,36 @@ class CausalSelfAttention(nn.Module):
         y = self.resid_drop(self.proj(y))
         return y, attn_save
 
+
+class SwiGLU(nn.Module):
+    """ SwiGLU feed-forward block: down( SiLU(gate(x)) * up(x) ).
+    Hidden width is set to ~2/3 * 4*n_embd so the 3 projections keep the
+    parameter count close to the original 2-matrix GELU FFN. """
+
+    def __init__(self, config):
+        super().__init__()
+        hidden = int(8 * config.n_embd / 3)
+        self.gate = nn.Linear(config.n_embd, hidden, bias=False)
+        self.up = nn.Linear(config.n_embd, hidden, bias=False)
+        self.down = nn.Linear(hidden, config.n_embd, bias=False)
+        self.drop = nn.Dropout(config.resid_pdrop)
+
+    def forward(self, x):
+        return self.drop(self.down(F.silu(self.gate(x)) * self.up(x)))
+
+
 class Block(nn.Module):
     """ an unassuming Transformer block """
 
     def __init__(self, config):
         super().__init__()
-        self.ln1 = nn.LayerNorm(config.n_embd)
-        self.ln2 = nn.LayerNorm(config.n_embd)
+        self.ln1 = RMSNorm(config.n_embd)
+        self.ln2 = RMSNorm(config.n_embd)
         self.attn = CausalSelfAttention(config)
-        self.mlp = nn.Sequential(
-            nn.Linear(config.n_embd, 4 * config.n_embd),
-            nn.GELU(),
-            nn.Linear(4 * config.n_embd, config.n_embd),
-            nn.Dropout(config.resid_pdrop),
-        )
+        self.mlp = SwiGLU(config)
 
-    def forward(self, x):
-        y, attn = self.attn(self.ln1(x))
+    def forward(self, x, num_cond=0):
+        y, attn = self.attn(self.ln1(x), num_cond=num_cond)
         x = x + y
         x = x + self.mlp(self.ln2(x))
         return x, attn
@@ -116,12 +186,13 @@ class GPT(nn.Module):
         if config.num_props:
             self.prop_nn = nn.Linear(config.num_props, config.n_embd)
      
-        self.pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
+        # positional information is injected via Rotary Position Embeddings (RoPE) inside
+        # each attention layer, so no learned absolute position embedding is used.
         self.drop = nn.Dropout(config.embd_pdrop)
         # transformer
         self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
         # decoder head
-        self.ln_f = nn.LayerNorm(config.n_embd)
+        self.ln_f = RMSNorm(config.n_embd)
         self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         self.block_size = config.block_size
@@ -156,7 +227,7 @@ class GPT(nn.Module):
         decay = set()
         no_decay = set()
         whitelist_weight_modules = (torch.nn.Linear, torch.nn.LSTM)
-        blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
+        blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding, RMSNorm)
         for mn, m in self.named_modules():
             for pn, p in m.named_parameters():
                 fpn = '%s.%s' % (mn, pn) if mn else pn # full param name
@@ -170,9 +241,6 @@ class GPT(nn.Module):
                 elif pn.endswith('weight') and isinstance(m, blacklist_weight_modules):
                     # weights of blacklist modules will NOT be weight decayed
                     no_decay.add(fpn)
-
-        # special case the position embedding parameter in the root GPT module as not decayed
-        no_decay.add('pos_emb')
 
         # validate that we considered every parameter
         param_dict = {pn: p for pn, p in self.named_parameters()}
@@ -199,9 +267,8 @@ class GPT(nn.Module):
 
         # forward the GPT model
         token_embeddings = self.tok_emb(idx) # each index maps to a (learnable) vector
-        position_embeddings = self.pos_emb[:, :t, :] # each position maps to a (learnable) vector
         type_embeddings = self.type_emb(torch.ones((b,t), dtype = torch.long, device = idx.device))
-        x = self.drop(token_embeddings + position_embeddings + type_embeddings)
+        x = self.drop(token_embeddings + type_embeddings)
 
         if self.config.num_props:
             type_embd = self.type_emb(torch.zeros((b, 1), dtype = torch.long, device = idx.device))
@@ -228,8 +295,11 @@ class GPT(nn.Module):
         # x = self.blocks(x)
         attn_maps = []
 
+        # number of prepended condition tokens (property / scaffold); SMILES tokens follow.
+        num_cond = x.size(1) - t
+
         for layer in self.blocks:
-            x, attn = layer(x)
+            x, attn = layer(x, num_cond)
             attn_maps.append(attn)
 
         x = self.ln_f(x)

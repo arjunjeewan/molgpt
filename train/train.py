@@ -137,4 +137,5 @@ if __name__ == '__main__':
                         tconf, train_dataset.stoi, train_dataset.itos)
     df = trainer.train(wandb)
 
-    df.to_csv(f'{args.run_name}.csv', index=False)
+    if df is not None:
+        df.to_csv(f'{args.run_name}.csv', index=False)
