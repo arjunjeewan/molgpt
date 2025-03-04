@@ -17,7 +17,7 @@ In this work, we train small custom GPT on Moses and Guacamol dataset with next 
 
 - All trained weights can be found here:
 
->https://www.kaggle.com/virajbagal/ligflow-final-weights
+>https://www.kaggle.com/virajbagal/ligflow-final-weights (old weights, prior to modernization)
 
 
 To train the model, make sure you have the datasets' csv file in the same directory as the code files.
@@ -66,6 +66,92 @@ both the **novelty gain** and the **FCD distribution-match penalty** (a clean tr
 SwiGLU and RMSNorm are behaviorally neutral, cost-free modernizations. Pick by use case —
 **de-novo / novelty → modern; benchmark / FCD-matching → baseline.** Full writeup, repro
 steps, and caveats in [`MODERNIZATION.md`](MODERNIZATION.md).
+
+## Setup (environment)
+
+Create the conda env from [`environment.yml`](environment.yml), then run the two
+post-install steps that can't be expressed declaratively (both are documented inline in
+the file — `molsets` needs `--no-deps`, and `guacamol` needs a one-line scipy patch):
+
+```bash
+conda env create -f environment.yml
+conda activate molgpt
+
+# (1) MOSES metrics — must be --no-deps (molsets would otherwise downgrade numpy/pandas/scipy)
+pip install molsets==0.3.1 --no-deps
+
+# (2) patch guacamol for modern scipy (scipy.histogram was removed; it equals numpy.histogram)
+sed -i 's/from scipy import histogram/from numpy import histogram/' \
+  "$(python -c 'import guacamol,os;print(os.path.dirname(guacamol.__file__))')/utils/chemistry.py"
+```
+
+The `torch` pin is the CUDA 12.6 wheel — edit the `--extra-index-url`/`+cu126` tag in
+`environment.yml` for a different CUDA (or CPU). **Datasets are not bundled**: rebuild
+`datasets/moses2.csv` with `python experiments/preprocess_moses.py`, and fetch
+`datasets/guacamol2.csv` from Kaggle (`virajbagal/ligflow-datasets`).
+
+## Training & evaluating the modernized configurations
+
+All commands run from the inner `molgpt/` code directory (the one containing `train.py`
+and `experiments/`), with the env active (`conda activate molgpt`). Checkpoints are
+written to `../cond_gpt/weights/`. (The `experiments/run_*.sh` drivers `cd` to this
+directory automatically, so they can be launched from anywhere once the env is active.)
+
+**MOSES — architecture ablation** (`--arch {baseline,modern}`):
+
+```bash
+python experiments/train_seeded.py --arch modern   --seed 1 --epochs 10 --run_name unconditional_moses_modern_s1
+python experiments/train_seeded.py --arch baseline --seed 1 --epochs 10 --run_name unconditional_moses_baseline_s1
+```
+
+**GuacaMol — per-component ablation** (`--config {baseline,rope,swiglu,rmsnorm,modern}`):
+
+```bash
+# unconditional (single component on, or 'modern' for all three)
+python experiments/train_ablate.py --config rope --seed 42 --epochs 10 --run_name guaca_uncond_rope_s42
+
+# property-conditioned
+python experiments/train_ablate.py --config modern --seed 42 --epochs 10 --run_name guaca_logp_modern_s42 \
+    --num_props 1 --props logp
+
+# scaffold-conditioned
+python experiments/train_ablate.py --config modern --seed 42 --epochs 10 --run_name guaca_scaf_modern_s42 \
+    --scaffold
+
+# scaffold + property
+python experiments/train_ablate.py --config modern --seed 42 --epochs 10 --run_name guaca_scaflogp_modern_s42 \
+    --num_props 1 --props logp --scaffold
+```
+
+**Evaluation** (add `--baseline` for baseline-arch MOSES checkpoints; modern is the default):
+
+```bash
+# MOSES decoding-temperature frontier (fast metrics) -> datasets/sweep_<tag>.csv
+python experiments/sweep_decode.py --ckpt ../cond_gpt/weights/unconditional_moses_modern_s1.pt \
+    --temps "0.7 0.9 1.0 1.2 1.6" --out datasets/sweep_modern_s1.csv
+
+# MOSES full metrics (FCD/SNN/Frag/Scaf/...) at one temperature -> datasets/moses_metrics_<tag>_T1.0.json
+python experiments/gen_eval_moses.py --ckpt ../cond_gpt/weights/unconditional_moses_modern_s1.pt \
+    --temp 1.0 --tag modern_s1
+
+# GuacaMol (config + conditioning are auto-read from the checkpoint's sidecar .json)
+python experiments/eval_guaca.py --run_name guaca_uncond_rope_s42 --temp 1.0
+```
+
+**End-to-end, idempotent pipelines** (each phase skips already-finished work, so re-running is safe):
+
+```bash
+# MOSES multi-seed: train seeds 1,2 (both archs) + 25-epoch modern -> eval all -> aggregate
+bash experiments/run_train_all.sh
+bash experiments/run_eval_all.sh
+python experiments/aggregate_seeds.py        # -> experiments/multiseed_results.md
+
+# GuacaMol full matrix: train -> eval -> aggregate
+bash experiments/run_guaca_all.sh            # -> experiments/guaca_ablation_results.md
+```
+
+To widen the GuacaMol matrix, edit `A_SEEDS` / `B_SEEDS` / `B_MODES` in
+`experiments/run_train_guaca.sh` and re-run `run_guaca_all.sh`.
 
 ### Table 1 — GuacaMol per-component ablation (unconditional, T=1.0, 3 seeds {1,2,42})
 

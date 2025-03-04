@@ -114,21 +114,21 @@ mask. See §4.4 for why this turned out to be unnecessary anyway.
 
 - **Data.** The repo's Drive dataset link is dead; `datasets/moses2.csv` was
   reconstructed from the canonical MOSES splits in `molsets`
-  (`_dl/preprocess_moses.py`) — exactly the paper's 1.9M rows
+  (`experiments/preprocess_moses.py`) — exactly the paper's 1.9M rows
   (train 1.58M / test 176k / test_scaffolds 176k).
 - **Fair ablation.** Both architectures trained with **identical** data, batch size
   (384), LR (6e-4), schedule, and epoch count (10). Same 1,584,079 train / 175,984 val
   split after identical `dropna`.
 - **Multi-seed robustness.** Each architecture trained on **3 seeds {42, 1, 2}** (the
   seed sets both weight init and DataLoader shuffle order) via the single unified script
-  `_dl/train_seeded.py`, so every data point shares one code path. Final train losses are
+  `experiments/train_seeded.py`, so every data point shares one code path. Final train losses are
   tight across seeds (baseline 0.310–0.319, modern 0.309–0.316), confirming stable
   optimization. Metrics below are reported as **mean ± std across the 3 seeds**, with a
   **paired** modern-vs-baseline comparison (matched by seed). A separate **25-epoch**
   modernized run (seed 42) probes the training-budget hypothesis (§4.7).
-- **Generation/eval.** `_dl/gen_eval_moses.py` (full MOSES metrics) and
-  `_dl/sweep_decode.py` (fast metrics across decoding settings); `_dl/run_train_all.sh`,
-  `_dl/run_eval_all.sh` drive the multi-seed grid and `_dl/aggregate_seeds.py` computes
+- **Generation/eval.** `experiments/gen_eval_moses.py` (full MOSES metrics) and
+  `experiments/sweep_decode.py` (fast metrics across decoding settings); `experiments/run_train_all.sh`,
+  `experiments/run_eval_all.sh` drive the multi-seed grid and `experiments/aggregate_seeds.py` computes
   the mean ± std and the paired test. The repo's own `generate.py` hardcodes
   temperature=1 and was not used.
 - **Environment.** conda env `molgpt` (py3.10, torch 2.6.0+cu126, single GV100).
@@ -161,7 +161,7 @@ evaluation at T=1.0 — see §4.6.
 ### 4.3 The validity "gap" **is** a decoding (temperature) artifact
 
 A temperature sweep on the modernized checkpoint (no retraining,
-`_dl/sweep_decode.py`):
+`experiments/sweep_decode.py`):
 
 | T | Validity | Unique | Novelty | IntDiv1 |
 |---|---|---|---|---|
@@ -292,7 +292,7 @@ To (a) check the MOSES findings hold on a second dataset and (b) finally *attrib
 FCD trade-off (§4.6) to individual components, we ran a 5-config component grid on
 **GuacaMol** (1.27M ChEMBL-derived train; the authors' exact `guacamol2.csv`),
 unconditional, **3 seeds**, T = 1.0. Each modern component is toggled independently on a
-unified model (`_dl/model_ablate.py`) that is **proven bit-identical** (0.00e+00 logit
+unified model (`experiments/model_ablate.py`) that is **proven bit-identical** (0.00e+00 logit
 diff, matched params) to the original baseline and the full-modern definitions at the
 all-off / all-on corners. FCD and KL-div use a fixed held-out reference (mean ± std):
 
@@ -340,35 +340,35 @@ All commands run with CWD = `molgpt/`, conda env `molgpt` active.
 ```bash
 # Modernized model: train (10 epochs) → generate+eval @ T=1.6 (full MOSES metrics)
 python train/train.py ...                              # produces cond_gpt/weights/unconditional_moses.pt
-python _dl/gen_eval_moses.py --temp 1.6 --gen_size 10000 --batch_size 512
+python experiments/gen_eval_moses.py --temp 1.6 --gen_size 10000 --batch_size 512
 
 # Baseline (original arch) ablation: train → generate+eval
-python _dl/train_baseline.py                           # cond_gpt/weights/unconditional_moses_baseline.pt
-python _dl/gen_eval_moses.py --baseline --temp 1.6 --gen_size 10000 --batch_size 512
+python experiments/train_baseline.py                           # cond_gpt/weights/unconditional_moses_baseline.pt
+python experiments/gen_eval_moses.py --baseline --temp 1.6 --gen_size 10000 --batch_size 512
 
 # Decoding sweeps (no retraining): temperature + nucleus, fast metrics
-python _dl/sweep_decode.py                             # -> datasets/sweep_decode_modified.csv
-python _dl/sweep_decode.py --baseline                  # -> datasets/sweep_decode_baseline.csv
+python experiments/sweep_decode.py                             # -> datasets/sweep_decode_modified.csv
+python experiments/sweep_decode.py --baseline                  # -> datasets/sweep_decode_baseline.csv
 
 # Multi-seed robustness (3 seeds x both archs + a 25-epoch modern run), then eval + stats
-bash   _dl/run_train_all.sh    # trains seeds 1,2 (both archs) + modern 25ep; reuses seed-42 ckpts
-bash   _dl/run_eval_all.sh     # per-ckpt frontier sweep + full MOSES @ T=1.0
-python _dl/aggregate_seeds.py  # -> _dl/multiseed_results.md, datasets/multiseed_frontier_long.csv
+bash   experiments/run_train_all.sh    # trains seeds 1,2 (both archs) + modern 25ep; reuses seed-42 ckpts
+bash   experiments/run_eval_all.sh     # per-ckpt frontier sweep + full MOSES @ T=1.0
+python experiments/aggregate_seeds.py  # -> experiments/multiseed_results.md, datasets/multiseed_frontier_long.csv
 
 # GuacaMol component ablation (§4.8): 5 configs x 3 seeds uncond + baseline/modern x cond/scaffold
-python _dl/test_model_ablate.py   # proves the toggle model == baseline (all-off) == modern (all-on)
-bash   _dl/run_guaca_all.sh        # train_ablate -> eval_guaca -> aggregate_guaca (all idempotent)
-                                   # tables -> _dl/guaca_ablation_results.md
+python experiments/test_model_ablate.py   # proves the toggle model == baseline (all-off) == modern (all-on)
+bash   experiments/run_guaca_all.sh        # train_ablate -> eval_guaca -> aggregate_guaca (all idempotent)
+                                   # tables -> experiments/guaca_ablation_results.md
 ```
 
-Key artifacts (MOSES): `_dl/model_baseline.py`, `_dl/train_baseline.py`,
-`_dl/train_seeded.py`, `_dl/gen_eval_moses.py`, `_dl/sweep_decode.py`,
-`_dl/{run_train_all,run_eval_all}.sh`, `_dl/aggregate_seeds.py`; results in
-`_dl/multiseed_results.md`, `datasets/sweep_seed_*.csv`,
+Key artifacts (MOSES): `experiments/model_baseline.py`, `experiments/train_baseline.py`,
+`experiments/train_seeded.py`, `experiments/gen_eval_moses.py`, `experiments/sweep_decode.py`,
+`experiments/{run_train_all,run_eval_all}.sh`, `experiments/aggregate_seeds.py`; results in
+`experiments/multiseed_results.md`, `datasets/sweep_seed_*.csv`,
 `datasets/moses_metrics_*_T1.0.json`, `datasets/multiseed_frontier_long.csv`.
-Key artifacts (GuacaMol §4.8): `_dl/model_ablate.py` (+`test_model_ablate.py`),
-`_dl/train_ablate.py`, `_dl/eval_guaca.py`, `_dl/{run_train_guaca,run_eval_guaca,run_guaca_all}.sh`,
-`_dl/aggregate_guaca.py`; results in `_dl/guaca_ablation_results.md`,
+Key artifacts (GuacaMol §4.8): `experiments/model_ablate.py` (+`test_model_ablate.py`),
+`experiments/train_ablate.py`, `experiments/eval_guaca.py`, `experiments/{run_train_guaca,run_eval_guaca,run_guaca_all}.sh`,
+`experiments/aggregate_guaca.py`; results in `experiments/guaca_ablation_results.md`,
 `datasets/guaca_metrics_*.json`, `datasets/guaca_results_long.csv`.
 
 ---

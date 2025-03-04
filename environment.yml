@@ -1,0 +1,41 @@
+# Conda environment for the modernized MolGPT fork.
+#
+# Two quirks below CANNOT be expressed declaratively — run them after creating the env:
+#
+#   conda env create -f environment.yml
+#   conda activate molgpt
+#
+#   # (1) MOSES metrics. --no-deps is REQUIRED: molsets pins old numpy/pandas/scipy that
+#   #     would silently downgrade and break everything else in this env.
+#   pip install molsets==0.3.1 --no-deps
+#
+#   # (2) guacamol 0.5.5 imports the long-removed scipy.histogram (it equals numpy.histogram).
+#   #     Patch the one offending import in the installed package:
+#   sed -i 's/from scipy import histogram/from numpy import histogram/' \
+#     "$(python -c 'import guacamol,os;print(os.path.dirname(guacamol.__file__))')/utils/chemistry.py"
+#
+# Other notes:
+#   - torch here is the CUDA 12.6 wheel. For a different CUDA, change BOTH the --extra-index-url
+#     tag and the +cu126 local version (e.g. cu121); for CPU-only use `torch==2.6.0` with no index.
+#   - rdkit is the OLD rdkit-pypi 2022.9.5 wheel. Do NOT also `pip install rdkit` (the new
+#     official wheels) — having both installed shadows versions and breaks scaffold/SA code.
+name: molgpt
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - --extra-index-url https://download.pytorch.org/whl/cu126
+    - torch==2.6.0+cu126
+    - numpy==1.26.4
+    - pandas==1.5.3          # PINNED — molsets/moses still calls the removed DataFrame.append
+    - scipy==1.15.3
+    - scikit-learn==1.7.2
+    - networkx==3.4.2
+    - rdkit-pypi==2022.9.5    # NOT the newer `rdkit` wheel (see note above)
+    - guacamol==0.5.5         # then apply the scipy.histogram patch, quirk (2) above
+    - fcd-torch==1.0.7
+    - tqdm==4.67.3
+    # - wandb==0.27.1         # optional: the trainer stubs wandb out by default
+    # molsets==0.3.1 is installed separately with --no-deps, quirk (1) above
