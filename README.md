@@ -9,7 +9,7 @@ In this work, we train small custom GPT on Moses and Guacamol dataset with next 
 
 - Original Guacamol dataset can be found here:
 
-https://github.com/BenevolentAI/guacamol
+>https://github.com/BenevolentAI/guacamol
 
 - Original Moses dataset can be found here:
 
