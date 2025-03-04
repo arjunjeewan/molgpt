@@ -3,7 +3,9 @@ In this work, we train small custom GPT on Moses and Guacamol dataset with next 
 
 - The processed Guacamol and MOSES datasets in csv format can be downloaded from this link:
 
-https://drive.google.com/drive/folders/1LrtGru7Srj_62WMR4Zcfs7xJ3GZr9N4E?usp=sharing
+>~~https://drive.google.com/drive/folders/1LrtGru7Srj_62WMR4Zcfs7xJ3GZr9N4E?usp=sharing~~
+
+>https://www.kaggle.com/datasets/virajbagal/ligflow-datasets (working link)
 
 - Original Guacamol dataset can be found here:
 
@@ -11,11 +13,11 @@ https://github.com/BenevolentAI/guacamol
 
 - Original Moses dataset can be found here:
 
-https://github.com/molecularsets/moses
+>https://github.com/molecularsets/moses
 
 - All trained weights can be found here:
 
-https://www.kaggle.com/virajbagal/ligflow-final-weights
+>https://www.kaggle.com/virajbagal/ligflow-final-weights
 
 
 To train the model, make sure you have the datasets' csv file in the same directory as the code files.
