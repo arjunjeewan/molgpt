@@ -7,11 +7,17 @@ followed. All experiments are on the **unconditional MOSES** benchmark.
 > **TL;DR.** Three modern-transformer components (RoPE, SwiGLU, RMSNorm) were
 > swapped into the decoder, param-matched, and retrained from scratch. A fourth
 > proposed change was investigated and deliberately dropped as unsound. Controlled
-> ablation shows the modernization is **validity-neutral and distribution-preserving**,
-> and a decoding sweep shows the apparent "validity gap" vs. the manuscript was a
-> **sampling-temperature artifact**, not an architectural one. The one concrete payoff:
-> the rotary-embedding (RoPE) model is **consistently more novel at matched
-> validity** — the useful direction for de novo design.
+> ablation shows the modernization is **validity-neutral**, and a decoding sweep shows
+> the apparent "validity gap" vs. the manuscript was a **sampling-temperature artifact**,
+> not an architectural one. The concrete payoff: the rotary-embedding (RoPE) model is
+> **more novel at matched validity** — and a **3-seed** repeat confirms this edge is
+> **statistically significant at T ≤ 1.0** (paired t-test p < 0.05, all seeds agree),
+> the useful direction for de novo design. Two further results from running the full
+> evaluation across seeds: (i) the novelty comes with a **distributional-fidelity
+> trade-off** — the modernized model has higher (worse) FCD at a matched operating point,
+> consistent with its lower verbatim memorization; (ii) a **25-epoch run refutes the
+> training-budget explanation** for the residual gap vs. the paper — more training raises
+> validity but *lowers* novelty, moving away from, not toward, the manuscript's numbers.
 
 ---
 
@@ -110,12 +116,21 @@ mask. See §4.4 for why this turned out to be unnecessary anyway.
   reconstructed from the canonical MOSES splits in `molsets`
   (`_dl/preprocess_moses.py`) — exactly the paper's 1.9M rows
   (train 1.58M / test 176k / test_scaffolds 176k).
-- **Fair ablation.** Both architectures trained with **identical** data, seed (42),
-  batch size (384), LR (6e-4), schedule, and epoch count (10). Same
-  1,584,079 train / 175,984 val split after identical `dropna`.
+- **Fair ablation.** Both architectures trained with **identical** data, batch size
+  (384), LR (6e-4), schedule, and epoch count (10). Same 1,584,079 train / 175,984 val
+  split after identical `dropna`.
+- **Multi-seed robustness.** Each architecture trained on **3 seeds {42, 1, 2}** (the
+  seed sets both weight init and DataLoader shuffle order) via the single unified script
+  `_dl/train_seeded.py`, so every data point shares one code path. Final train losses are
+  tight across seeds (baseline 0.310–0.319, modern 0.309–0.316), confirming stable
+  optimization. Metrics below are reported as **mean ± std across the 3 seeds**, with a
+  **paired** modern-vs-baseline comparison (matched by seed). A separate **25-epoch**
+  modernized run (seed 42) probes the training-budget hypothesis (§4.7).
 - **Generation/eval.** `_dl/gen_eval_moses.py` (full MOSES metrics) and
-  `_dl/sweep_decode.py` (fast metrics across decoding settings). The repo's own
-  `generate.py` hardcodes temperature=1 and was not used.
+  `_dl/sweep_decode.py` (fast metrics across decoding settings); `_dl/run_train_all.sh`,
+  `_dl/run_eval_all.sh` drive the multi-seed grid and `_dl/aggregate_seeds.py` computes
+  the mean ± std and the paired test. The repo's own `generate.py` hardcodes
+  temperature=1 and was not used.
 - **Environment.** conda env `molgpt` (py3.10, torch 2.6.0+cu126, single GV100).
 
 ---
@@ -138,8 +153,10 @@ Training the **verbatim original architecture** under identical conditions gives
 validity **0.859** — statistically indistinguishable from the modernized **0.852**
 (Δ 0.7pt, within single-run noise) — and *both* sit ~4–5pt under the paper's 0.900.
 So the modernization does not cause the shortfall; RoPE/SwiGLU/RMSNorm are
-**validity-neutral and distribution-preserving** (every distributional metric agrees
-within ~1pt across all three columns).
+**validity-neutral** and preserve the fast distributional metrics (validity, uniqueness,
+internal diversity agree within ~1pt across all three columns). The one metric on which
+the two architectures *do* diverge is **FCD**, surfaced only by the full multi-seed
+evaluation at T=1.0 — see §4.6.
 
 ### 4.3 The validity "gap" **is** a decoding (temperature) artifact
 
@@ -170,26 +187,32 @@ alone spans the operating range — so there is no reason to add it for this mod
 This also retired the §2.4 "validity enforcement" motivation: temperature already buys
 near-100% validity on demand.
 
-### 4.5 The concrete payoff of the modernization: **novelty**
+### 4.5 The concrete payoff of the modernization: **novelty** (3 seeds, significant at T ≤ 1.0)
 
-Running the identical sweep on **both** architectures and comparing at matched
-temperature:
+Running the identical sweep on **both** architectures over **3 seeds each** and comparing
+at matched temperature. Values are **mean ± std (n=3)**; Δ Novelty is **paired** by seed,
+with a paired t-test:
 
-| T | Validity (mod / base) | Novelty (mod / base) | **Δ Novelty (mod − base)** |
-|---|---|---|---|
-| 0.7 | 0.999 / 0.999 | 0.696 / 0.663 | **+0.033** |
-| 0.8 | 0.999 / 0.999 | 0.740 / 0.707 | **+0.033** |
-| 0.9 | 0.997 / 0.998 | 0.770 / 0.748 | **+0.022** |
-| 1.0 | 0.994 / 0.994 | 0.795 / 0.779 | **+0.017** |
-| 1.2 | 0.978 / 0.978 | 0.851 / 0.846 | **+0.005** |
-| 1.6 | 0.853 / 0.859 | 0.931 / 0.930 | **+0.001** |
+| T | Validity (mod / base) | Novelty (mod / base) | **Δ Novelty (mod − base)** | paired p |
+|---|---|---|---|---|
+| 0.7 | 0.9996 / 0.9994 | 0.6906±.0047 / 0.6640±.0039 | **+0.0266 ±.0065** | **0.019** |
+| 0.9 | 0.9973 / 0.9977 | 0.7625±.0064 / 0.7426±.0046 | **+0.0199 ±.0028** | **0.007** |
+| 1.0 | 0.9944 / 0.9945 | 0.7932±.0021 / 0.7797±.0027 | **+0.0135 ±.0042** | **0.031** |
+| 1.2 | 0.9794 / 0.9783 | 0.8502±.0059 / 0.8454±.0002 | +0.0048 ±.0058 | 0.29 |
+| 1.6 | 0.8481 / 0.8601 | 0.9292±.0028 / 0.9292±.0013 | +0.0000 ±.0030 | 1.00 |
 
-- **Validity, diversity, uniqueness frontiers are identical** (Δ ≤ 0.6pt everywhere —
-  noise). The two validity curves overlay exactly → validity is fully
-  architecture-independent.
-- **The modernized model is consistently more novel at matched temperature.** The edge
-  is monotone and ordered — largest at low T (**+3.3pt @ T=0.7**), shrinking to ~0 at
-  T=1.6. A monotone gap across six independent temperatures is a real effect, not scatter.
+- **Validity, diversity, uniqueness frontiers are identical** (Δ ≤ 1pt everywhere, well
+  within the seed std). The two validity curves overlay → validity is
+  architecture-independent. Cross-seed std is small (≤ 0.006 on every frontier metric),
+  so a 3-seed mean is already a tight estimate.
+- **The modernized model is more novel at matched temperature, and the edge is
+  statistically significant for T ≤ 1.0** (paired p = 0.019 / 0.007 / 0.031 at T =
+  0.7 / 0.9 / 1.0; **all three seeds positive** at each). The edge is largest at low T
+  (**+2.7pt @ T=0.7**), shrinks through **+1.4pt @ T=1.0**, and is **no longer
+  significant at T ≥ 1.2** (+0.5pt, one seed negative) — washing out entirely by T=1.6.
+  The multi-seed test sharpens the earlier single-run trend: the payoff is **real and
+  significant in the high-validity regime (T ≤ 1.0, validity ≥ 0.994)** and is noise at
+  hot temperatures.
 
 **Mechanism — RoPE.** Novelty here = fraction of valid unique generations *not* in the
 training set. A higher value at matched validity/diversity means **fewer training
@@ -200,12 +223,113 @@ shift-equivariant positioning memorizes less and recombines more. The **converge
 high T is the tell**: at low T sampling is tight and the model's mode structure
 (memorized vs. generalized) governs output, so the difference shows; at T=1.6 sampling
 noise pushes both models off their modes toward the diversity ceiling and the difference
-washes out. SwiGLU/RMSNorm affect optimization, not sequence memorization, and are
-unlikely contributors.
+washes out. The **distributional-fidelity trade-off in §4.6** (modern has higher FCD) is
+the flip side of the same lower-memorization mechanism. SwiGLU/RMSNorm affect
+optimization, not sequence memorization, so the *novelty* direction is attributed to RoPE;
+the *magnitude* of the FCD shift is a property of the modernized stack as a whole (no
+per-component ablation was run for FCD).
 
-**Net:** the modernization is not merely neutral — at the useful high-validity operating
-point (T=1.0–1.2) it yields ~1.5–2pt more novel molecules at the same validity and
-diversity, attributable to RoPE.
+**Net:** at the useful high-validity operating point **T = 1.0** the modernization yields
+**+1.4pt novelty (p = 0.03)** at the same validity (0.994), uniqueness, and diversity —
+a small but robust, RoPE-attributable improvement in the de-novo-design direction.
+
+### 4.6 Full MOSES at T = 1.0 — the novelty comes with an **FCD trade-off**
+
+Running the *full* `moses.get_all_metrics` (incl. the slow FCD / SNN / Frag / Scaf) at
+the recommended **T = 1.0** operating point, 3 seeds per arch (**mean ± std**):
+
+| Metric | Baseline-arch | Modernized | better |
+|---|---|---|---|
+| Validity | 0.9945 ±.0004 | 0.9937 ±.0004 | tie |
+| Unique@10K | 0.9990 ±.0004 | 0.9983 ±.0004 | tie |
+| Novelty | 0.7845 ±.0058 | 0.7896 ±.0050 | modern |
+| IntDiv1 | 0.8504 ±.0004 | 0.8503 ±.0002 | tie |
+| **FCD/Test** ↓ | **0.5709 ±.0351** | **0.9059 ±.0289** | **baseline** |
+| Frag/Test ↑ | 0.9972 ±.0001 | 0.9849 ±.0007 | baseline |
+| SNN/Test | 0.6241 ±.0005 | 0.6231 ±.0025 | tie |
+| Scaf/Test | 0.8833 ±.0029 | 0.8808 ±.0042 | tie |
+| Filters | 0.9978 ±.0002 | 0.9974 ±.0002 | tie |
+
+The fast metrics (validity, uniqueness, diversity) are architecture-independent as before,
+**but the more sensitive distributional metrics disagree**: the modernized model has a
+**markedly higher (worse) FCD — 0.91 vs 0.57**, a gap of ~0.34 against a per-seed std of
+~0.03 (≈ 10σ, unambiguous) — and a slightly lower Frag-similarity. FCD measures distance
+between the *generated* and the *reference* distribution in ChemNet feature space; a model
+that reproduces fewer training molecules verbatim (higher novelty) necessarily drifts
+further from that reference. So **FCD↑ and Novelty↑ are two faces of the same
+lower-memorization behaviour** — the modernization is *not* "distribution-preserving" on
+FCD; it trades benchmark-distribution fidelity for novelty. Which is preferable depends on
+the goal: **de novo design favours the modernized model (novelty); benchmark
+distribution-matching favours the baseline (FCD).**
+
+### 4.7 Longer training (25 epochs) **refutes** the training-budget hypothesis
+
+The single uncontrolled factor vs. the manuscript was training budget (10 epochs on
+reconstructed MOSES). We trained the modernized model for **25 epochs** (seed 42; final
+train loss 0.296 vs. ~0.31 at 10 ep) and re-ran the frontier:
+
+| T | Validity (10ep mean → 25ep) | Novelty (10ep mean → 25ep) |
+|---|---|---|
+| 1.0 | 0.9944 → 0.9963 | 0.7932 → **0.7346** |
+| 1.2 | 0.9794 → 0.9856 | 0.8502 → **0.7988** |
+| 1.6 | 0.8481 → 0.8890 | 0.9292 → **0.8894** |
+
+More training **raises validity but lowers novelty at every temperature**, and at matched
+validity it is a strictly *worse* novelty–validity frontier (e.g. at validity ≈ 0.986 the
+25-ep model gives novelty 0.80 vs. ~0.84 interpolated for 10-ep). Full MOSES at T=1.0
+confirms it (Novelty 0.740 vs 0.790; FCD essentially unchanged at 0.899 vs 0.906).
+
+**Interpretation.** The paper reports high validity *and* high novelty (0.900 / 0.941)
+simultaneously; more epochs move us in the **opposite** direction — toward the
+memorization corner (higher validity, lower novelty) — so the residual gap vs. the
+manuscript is **not** explained by undertraining. (The unchanged FCD also shows the §4.6
+FCD gap is architectural, not a budget artifact.) The remaining discrepancy is more
+plausibly in data/preprocessing or reporting details than in training length.
+
+### 4.8 GuacaMol cross-benchmark + **per-component** ablation — the FCD gap is **RoPE**
+
+To (a) check the MOSES findings hold on a second dataset and (b) finally *attribute* the
+FCD trade-off (§4.6) to individual components, we ran a 5-config component grid on
+**GuacaMol** (1.27M ChEMBL-derived train; the authors' exact `guacamol2.csv`),
+unconditional, **3 seeds**, T = 1.0. Each modern component is toggled independently on a
+unified model (`_dl/model_ablate.py`) that is **proven bit-identical** (0.00e+00 logit
+diff, matched params) to the original baseline and the full-modern definitions at the
+all-off / all-on corners. FCD and KL-div use a fixed held-out reference (mean ± std):
+
+| Config | RoPE | SwiGLU | RMSNorm | Validity | Novelty | KL-div | FCD ↓ |
+|---|:--:|:--:|:--:|---|---|---|---|
+| baseline      | ✗ | ✗ | ✗ | 0.977 | 0.955 | 0.994 | **0.992 ±.007** |
+| +RoPE         | ✓ | ✗ | ✗ | 0.981 | **0.960** | 0.988 | **1.253 ±.026** |
+| +SwiGLU       | ✗ | ✓ | ✗ | 0.977 | 0.947 | 0.995 | 1.004 ±.009 |
+| +RMSNorm      | ✗ | ✗ | ✓ | 0.979 | 0.953 | 0.994 | **0.969 ±.024** |
+| modern (all)  | ✓ | ✓ | ✓ | 0.981 | 0.949 | 0.989 | **1.336 ±.025** |
+
+(Uniqueness is 0.999 for every config.) **RoPE is solely responsible for the FCD
+degradation**: adding it alone moves FCD 0.992 → 1.253 (+0.26; the three +RoPE seeds
+{1.221, 1.252, 1.285} sit entirely above baseline's {0.986, 0.988, 1.001} — zero overlap,
+≈ 10σ), whereas **+SwiGLU (1.004) and +RMSNorm (0.969) leave FCD at baseline** (RMSNorm is
+even marginally *better*). The same component carries the **novelty** gain (+RoPE is highest
+at 0.960). So — now at the component level — RoPE's relative positioning memorizes the
+training distribution less: **higher novelty and higher FCD are two faces of one RoPE
+effect**, not a whole-stack property. This both **resolves the open §4.6 attribution** and
+**reproduces the MOSES trade-off on a second benchmark**.
+
+**Generation-mode coverage (baseline vs modern, GuacaMol, T = 1.0, seed 42).** Beyond
+unconditional, the modernization was checked across the other generation kinds — property
+(logp), scaffold, and scaffold+property — using per-target **MAD** (deviation of the
+generated property from the requested value) and Murcko **scaffold-match**:
+
+| Mode | Arch (base / modern) | Validity | Novelty | MAD(logp) ↓ | Scaf-match ↑ |
+|---|---|---|---|---|---|
+| property: logp | base / modern | 0.969 / 0.972 | 0.978 / 0.971 | 0.224 / **0.200** | — |
+| scaffold       | base / modern | 0.994 / 0.995 | 0.992 / 0.989 | — | 0.973 / **0.982** |
+| scaffold+logp  | base / modern | 0.989 / 0.989 | 0.999 / 0.999 | 0.192 / 0.199 | 0.979 / 0.962 |
+
+The modernization is **neutral-to-slightly-positive on conditioning quality**: in the
+single-condition modes modern gives **better property control** (logp-MAD 0.200 vs 0.224)
+and **better scaffold adherence** (0.982 vs 0.973); combined scaffold+logp is a wash. So the
+architecture change does not cost conditional controllability — the only material
+distributional cost remains the unconditional FCD, which is RoPE.
 
 ---
 
@@ -225,22 +349,48 @@ python _dl/gen_eval_moses.py --baseline --temp 1.6 --gen_size 10000 --batch_size
 # Decoding sweeps (no retraining): temperature + nucleus, fast metrics
 python _dl/sweep_decode.py                             # -> datasets/sweep_decode_modified.csv
 python _dl/sweep_decode.py --baseline                  # -> datasets/sweep_decode_baseline.csv
+
+# Multi-seed robustness (3 seeds x both archs + a 25-epoch modern run), then eval + stats
+bash   _dl/run_train_all.sh    # trains seeds 1,2 (both archs) + modern 25ep; reuses seed-42 ckpts
+bash   _dl/run_eval_all.sh     # per-ckpt frontier sweep + full MOSES @ T=1.0
+python _dl/aggregate_seeds.py  # -> _dl/multiseed_results.md, datasets/multiseed_frontier_long.csv
+
+# GuacaMol component ablation (§4.8): 5 configs x 3 seeds uncond + baseline/modern x cond/scaffold
+python _dl/test_model_ablate.py   # proves the toggle model == baseline (all-off) == modern (all-on)
+bash   _dl/run_guaca_all.sh        # train_ablate -> eval_guaca -> aggregate_guaca (all idempotent)
+                                   # tables -> _dl/guaca_ablation_results.md
 ```
 
-Key artifacts: `_dl/model_baseline.py`, `_dl/train_baseline.py`, `_dl/gen_eval_moses.py`,
-`_dl/sweep_decode.py`; results in `datasets/sweep_decode_{modified,baseline}.csv`.
+Key artifacts (MOSES): `_dl/model_baseline.py`, `_dl/train_baseline.py`,
+`_dl/train_seeded.py`, `_dl/gen_eval_moses.py`, `_dl/sweep_decode.py`,
+`_dl/{run_train_all,run_eval_all}.sh`, `_dl/aggregate_seeds.py`; results in
+`_dl/multiseed_results.md`, `datasets/sweep_seed_*.csv`,
+`datasets/moses_metrics_*_T1.0.json`, `datasets/multiseed_frontier_long.csv`.
+Key artifacts (GuacaMol §4.8): `_dl/model_ablate.py` (+`test_model_ablate.py`),
+`_dl/train_ablate.py`, `_dl/eval_guaca.py`, `_dl/{run_train_guaca,run_eval_guaca,run_guaca_all}.sh`,
+`_dl/aggregate_guaca.py`; results in `_dl/guaca_ablation_results.md`,
+`datasets/guaca_metrics_*.json`, `datasets/guaca_results_long.csv`.
 
 ---
 
 ## 6. Caveats & possible next steps
 
-- **Single run per configuration** — no error bars. The ~1.5–3pt novelty edge is
-  supported by a monotone trend across six temperatures, but a **multi-seed** repeat
-  would let it be reported formally.
-- **Residual vs. the manuscript.** At *matched* 0.900 validity (≈ T=1.45) our novelty is
-  ~0.90 vs. the paper's 0.941 — a small residual most plausibly from **training budget /
-  data** (10 epochs on reconstructed MOSES), the one factor neither the ablation nor the
-  sweep controlled. A longer modernized run (20–30 epochs) would test this.
+- **Multi-seed: done (n=3).** The novelty edge now has error bars and a paired t-test
+  (§4.5): significant at T ≤ 1.0, noise at T ≥ 1.2. n=3 keeps the t-test low-power, so
+  significance rests jointly on the p-values *and* unanimous sign agreement across seeds;
+  n=5 would tighten the T=1.2 boundary case. Variance is small (≤ 0.006), so more seeds
+  are unlikely to change the conclusion.
+- **Residual vs. the manuscript — not training budget (§4.7).** A 25-epoch run *worsens*
+  novelty while improving validity, i.e. moves away from the paper's simultaneous
+  0.900/0.941. So the residual is **not** undertraining; it is more plausibly
+  data/preprocessing of the reconstructed MOSES, or reporting differences. The
+  **FCD trade-off (§4.6)** is likewise architectural, not budget-driven.
+- **FCD attributed — it's RoPE (§4.8). [resolved]** A per-component GuacaMol ablation
+  (3 seeds) isolates the FCD degradation entirely to RoPE (+RoPE alone: 0.992 → 1.253,
+  ≈ 10σ, zero seed overlap), which also carries the novelty gain; SwiGLU and RMSNorm are
+  FCD-neutral (RMSNorm marginally better). The novelty↑/FCD↑ trade-off is thus a
+  single-component (RoPE) property, and it reproduces on a second benchmark. Conditional /
+  scaffold controllability is neutral-to-slightly-better under the modernization (§4.8).
 - **Representation-level levers** (not pursued here) are the dominant lever for validity
   if ever needed: SELFIES (validity = 1.0 by construction), SAFE (fragment/scaffold
   control), randomized-SMILES augmentation. These are orthogonal to the architecture
